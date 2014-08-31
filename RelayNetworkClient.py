@@ -429,25 +429,67 @@ class BitcoinP2PRelayer:
 			print("Failed to send transaction to bitcoind node: ", err)
 
 
-class RelayNetworkToP2PManager:
-	def __init__(self, relay_server, p2p_server):
-		relay = RelayNetworkClient(relay_server, self)
-		self.p2p = BitcoinP2PRelayer(p2p_server, relay)
+class BitcoinNonfullRelayProxy:
+	def __init__(self, p2pmanager):
+		self.p2pmanager = p2pmanager
 
 	def provide_block_header(self, header_data):
-		self.p2p.provide_block_header(header_data)
+		return #This wont ever happen...
 
 	def provide_block(self, block_data):
-		self.p2p.provide_block(block_data)
+		self.p2pmanager.provide_nonfull_block(block_data)
 
 	def provide_transaction(self, transaction_data):
-		self.p2p.provide_transaction(transaction_data)
+		self.p2pmanager.provide_nonfull_transaction(transaction_data)
+
+class RelayNetworkToP2PManager:
+	def __init__(self, relay_server, full_servers, nonfull_servers):
+		self.relay = RelayNetworkClient(relay_server, self)
+		self.nonfull_proxy = BitcoinNonfullRelayProxy(self)
+		self.full_nodes = []
+		self.nonfull_nodes = []
+
+		for server in full_servers:
+			self.full_nodes.append(BitcoinP2PRelayer(server, self.relay))
+
+		for server in nonfull_servers:
+			self.nonfull_nodes.append(BitcoinP2PRelayer(server, self.nonfull_proxy))
+
+	def provide_block_header(self, header_data):
+		for node in self.full_nodes:
+			node.provide_block_header(header_data)
+
+	def provide_block(self, block_data):
+		for node in self.full_nodes:
+			node.provide_block(block_data)
+
+	def provide_transaction(self, transaction_data):
+		for node in self.full_nodes:
+			node.provide_transaction(transaction_data)
+
+	def provide_nonfull_block(self, block_data):
+		self.relay.provide_block(block_data)
+		for node in self.nonfull_nodes:
+			node.provide_block(block_data)
+
+	def provide_nonfull_transaction(self, transaction_data):
+		self.relay.provide_transaction(transaction_data)
 
 
 if __name__ == "__main__":
-	if len(sys.argv) != 4:
-		print("USAGE: ", sys.argv[0], " RELAY_NODE.relay.mattcorallo.com LOCAL_BITCOIND LOCAL_BITCOIND_PORT")
+	if len(sys.argv) < 3:
+		print("USAGE: ", sys.argv[0], " RELAY_NODE.relay.mattcorallo.com ([full|nonf]:LOCAL_BITCOIND:LOCAL_BITCOIND_PORT)*")
 		sys.exit(1)
-	RelayNetworkToP2PManager(sys.argv[1], (sys.argv[2], int(sys.argv[3])))
+
+	full_servers = []
+	nonfull_servers = []
+	for i in range(2, len(sys.argv)):
+		host = sys.argv[i][5:]
+		if sys.argv[i].startswith("full:"):
+			full_servers.append((host.split(':')[0], int(host.split(':')[1])))
+		else:
+			nonfull_servers.append((host.split(':')[0], int(host.split(':')[1])))
+
+	RelayNetworkToP2PManager(sys.argv[1], full_servers, nonfull_servers)
 	while True:
 		time.sleep(60 * 60 * 24)
